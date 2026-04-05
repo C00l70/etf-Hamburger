@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>沪深300ETF份额 — 分析看板</title>
+  <!-- Vue 3 -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <!-- ECharts -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --border: #2d3a4f;
+      --text: #e8edf4;
+      --muted: #8b9cb3;
+      --accent: #3b82f6;
+      --green: #22c55e;
+      --red: #ef4444;
+      --amber: #f59e0b;
+      --font: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font);
+      background: linear-gradient(160deg, #0c1018 0%, #151d2e 50%, #0f1419 100%);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .app {
+      max-width: 1280px;
+      margin: 0 auto;
+    }
+    header {
+      margin-bottom: 16px;
+    }
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: var(--text);
+    }
+    .subtitle { color: var(--muted); font-size: 0.85rem; margin-top: 6px; }
+
+    /* 状态监控条 */
+    .status-bar {
+      border-radius: 10px;
+      padding: 12px 18px;
+      margin-bottom: 18px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 0.95rem;
+      font-weight: 500;
+      border: 1px solid var(--border);
+      transition: background 0.25s, border-color 0.25s;
+    }
+    .status-bar.ok {
+      background: rgba(34, 197, 94, 0.12);
+      border-color: rgba(34, 197, 94, 0.35);
+      color: #86efac;
+    }
+    .status-bar.warn {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: rgba(239, 68, 68, 0.45);
+      color: #fecaca;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .status-bar.ok .status-dot { background: var(--green); box-shadow: 0 0 10px var(--green); }
+    .status-bar.warn .status-dot { background: var(--red); box-shadow: 0 0 12px var(--red); }
+    .status-bar.info {
+      background: rgba(139, 156, 179, 0.12);
+      border-color: rgba(139, 156, 179, 0.35);
+      color: var(--muted);
+    }
+    .status-bar.info .status-dot { background: var(--muted); box-shadow: none; }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 14px 20px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 18px;
+      margin-bottom: 16px;
+    }
+    .toolbar-label {
+      color: var(--muted);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      width: 100%;
+      margin-bottom: -6px;
+    }
+    .checks {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+    }
+    .check-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      user-select: none;
+      font-size: 0.88rem;
+      color: var(--text);
+    }
+    .check-item input { accent-color: var(--accent); width: 16px; height: 16px; }
+    .hint { font-size: 0.78rem; color: var(--muted); width: 100%; }
+
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      margin-left: auto;
+    }
+    button.toggle-view {
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      color: #fff;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    button.toggle-view:hover { filter: brightness(1.08); }
+
+    .chart-wrap {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      min-height: 480px;
+    }
+    #main-chart { width: 100%; height: 520px; }
+
+    .table-wrap {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: auto;
+      max-height: 70vh;
+    }
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+    .data-table th,
+    .data-table td {
+      padding: 10px 12px;
+      text-align: right;
+      border-bottom: 1px solid var(--border);
+    }
+    .data-table th:first-child,
+    .data-table td:first-child { text-align: left; }
+    .data-table th {
+      position: sticky;
+      top: 0;
+      background: #243044;
+      color: var(--muted);
+      font-weight: 600;
+      z-index: 1;
+    }
+    .data-table tr:hover td { background: rgba(59, 130, 246, 0.08); }
+    .tag-yes { color: var(--red); font-weight: 600; }
+    .tag-no { color: var(--green); }
+    footer {
+      margin-top: 20px;
+      text-align: center;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .load-banner, .error-banner {
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin-bottom: 14px;
+      font-size: 0.9rem;
+    }
+    .load-banner {
+      background: rgba(59, 130, 246, 0.15);
+      border: 1px solid rgba(59, 130, 246, 0.35);
+      color: #93c5fd;
+    }
+    .error-banner {
+      background: rgba(245, 158, 11, 0.12);
+      border: 1px solid rgba(245, 158, 11, 0.4);
+      color: #fcd34d;
+    }
+    .file-pick {
+      display: inline-block;
+      margin-left: 12px;
+      cursor: pointer;
+      text-decoration: underline;
+      color: var(--accent);
+    }
+    .file-pick input { display: none; }
+    .chart-wrap.disabled { opacity: 0.45; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <div id="app" class="app">
+    <header>
+      <h1>沪深300 指数ETF 份额</h1>
+      <p class="subtitle">数据来自 data.json（由 csv_to_json.py 从爬虫 CSV 合并生成）· 双轴 · 均线 · 近5日背离</p>
+    </header>
+
+    <div v-if="loading" class="load-banner">正在加载 data.json …</div>
+    <div v-if="loadError" class="error-banner">
+      {{ loadError }}
+      <label class="file-pick">
+        手动选择 data.json
+        <input type="file" accept="application/json,.json" @change="onJsonFile" />
+      </label>
+    </div>
+
+    <!-- 背离状态条：根据最近一日（序列末尾）的 5 日差分判断 -->
+    <div
+      class="status-bar"
+      :class="statusBarClass"
+      role="status"
+    >
+      <span class="status-dot" aria-hidden="true"></span>
+      <span>{{ statusMessage }}</span>
+    </div>
+
+    <div class="toolbar">
+      <span class="toolbar-label">选择纳入合计的 ETF（全不选 = 默认九只全计）</span>
+      <div class="checks">
+        <label v-for="(name, i) in fundNames" :key="i" class="check-item">
+          <input type="checkbox" v-model="checked[i]" />
+          <span>{{ name }}</span>
+        </label>
+      </div>
+      <p class="hint">份额均线（MA5/13/60/120）始终基于当前勾选规则下的「每日总份额」计算。</p>
+      <div class="btn-row">
+        <button type="button" class="toggle-view" @click="showTable = !showTable">
+          {{ showTable ? '查看图表' : '查看原始数据' }}
+        </button>
+      </div>
+    </div>
+
+    <div v-show="!showTable" class="chart-wrap" :class="{ disabled: !hasData }">
+      <div id="main-chart" ref="chartEl"></div>
+    </div>
+
+    <div v-show="showTable" class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>日期</th>
+            <th>勾选总份额</th>
+            <th>沪深300收盘</th>
+            <th>MA5</th>
+            <th>MA13</th>
+            <th>MA60</th>
+            <th>MA120</th>
+            <th>当日背离</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in tableRows" :key="row.date">
+            <td>{{ row.date }}</td>
+            <td>{{ formatNum(row.totalShare) }}</td>
+            <td>{{ row.indexClose.toFixed(2) }}</td>
+            <td>{{ row.ma5 != null ? formatNum(row.ma5) : '—' }}</td>
+            <td>{{ row.ma13 != null ? formatNum(row.ma13) : '—' }}</td>
+            <td>{{ row.ma60 != null ? formatNum(row.ma60) : '—' }}</td>
+            <td>{{ row.ma120 != null ? formatNum(row.ma120) : '—' }}</td>
+            <td :class="row.divergence ? 'tag-yes' : 'tag-no'">
+              {{ row.divergence ? '是' : '否' }}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <footer>
+      运行 <code>python csv_to_json.py</code> 根据 CSV 生成 data.json；若直接双击本页，请用「手动选择 data.json」或在目录下执行
+      <code>python -m http.server 8080</code> 后访问 <code>http://localhost:8080/</code> 以正常 fetch 加载。
+    </footer>
+  </div>
+
+  <script>
+    const { createApp, ref, computed, watch, onMounted, onUnmounted, nextTick } = Vue;
+
+    /** 与 csv_to_json.py 中 fund_1..9 顺序一致的默认名称（若 JSON 未带 fund_labels 则使用） */
+    const DEFAULT_FUND_LABELS = [
+      '华泰柏瑞', '易方达', '中金', '华夏', '工银',
+      '广发', '兴业', '国寿', '平安',
+    ];
+
+    /**
+     * 校验并写入 rawData / fundNames
+     * @param {object} payload — csv_to_json 输出的 JSON
+     */
+    function normalizePayload(payload) {
+      if (!payload || !Array.isArray(payload.series)) {
+        throw new Error('JSON 格式错误：缺少 series 数组');
+      }
+      const labels =
+        Array.isArray(payload.fund_labels) && payload.fund_labels.length === 9
+          ? payload.fund_labels
+          : DEFAULT_FUND_LABELS.slice();
+      const series = [];
+      for (const row of payload.series) {
+        if (!row.date) continue;
+        const o = {
+          date: String(row.date).slice(0, 10),
+          index_close: Number(row.index_close),
+        };
+        if (Number.isNaN(o.index_close)) continue;
+        for (let f = 1; f <= 9; f++) {
+          const k = `fund_${f}`;
+          const v = row[k];
+          o[k] = v == null || v === '' ? NaN : Number(v);
+        }
+        series.push(o);
+      }
+      if (!series.length) throw new Error('series 中没有有效数据行');
+      return { fund_labels: labels, series };
+    }
+
+    /** 简单滑动平均；窗口不足时返回 null */
+    function movingAverage(arr, window) {
+      const n = arr.length;
+      const out = new Array(n).fill(null);
+      for (let i = 0; i < n; i++) {
+        if (i < window - 1) continue;
+        let s = 0;
+        for (let j = 0; j < window; j++) s += arr[i - j];
+        out[i] = s / window;
+      }
+      return out;
+    }
+
+    /**
+     * 单日背离：以该日为终点，份额变化 = share[i] - share[i-5]，指数同理
+     * 条件1：份额Δ>0 且 指数Δ<0；条件2：份额Δ<0 且 指数Δ>0
+     */
+    function divergenceAtIndex(totalShares, indexCloses, i) {
+      if (i < 5) return false;
+      const ds = totalShares[i] - totalShares[i - 5];
+      const di = indexCloses[i] - indexCloses[i - 5];
+      const upDown = ds > 0 && di < 0;
+      const downUp = ds < 0 && di > 0;
+      return upDown || downUp;
+    }
+
+    /** 最新一日（数组末尾）是否触发背离 —— 用于顶部状态条 */
+    function latestDivergence(totalShares, indexCloses) {
+      const n = totalShares.length;
+      if (n === 0) {
+        return { alert: false, message: '● 暂无数据：请运行 csv_to_json.py 生成 data.json 或手动选择文件。' };
+      }
+      if (n < 6) {
+        return { alert: false, message: '● 数据不足 6 日，暂不计算背离。' };
+      }
+      const i = n - 1;
+      const ds = totalShares[i] - totalShares[i - 5];
+      const di = indexCloses[i] - indexCloses[i - 5];
+      if (ds > 0 && di < 0) {
+        return {
+          alert: true,
+          message: '⚠️ 警告：近5日出现背离（份额上升，指数下降），请注意风险！',
+        };
+      }
+      if (ds < 0 && di > 0) {
+        return {
+          alert: true,
+          message: '⚠️ 警告：近5日出现背离（份额下降，指数上升），请注意风险！',
+        };
+      }
+      return { alert: false, message: '● 正常：近5日份额与指数方向未出现设定背离。' };
+    }
+
+    createApp({
+      setup() {
+        const rawData = ref([]);
+        const fundNames = ref(DEFAULT_FUND_LABELS.slice());
+        const checked = ref(Array(9).fill(true));
+        const showTable = ref(false);
+        const chartEl = ref(null);
+        const loading = ref(true);
+        const loadError = ref('');
+        let chartInstance = null;
+
+        const hasData = computed(() => rawData.value.length > 0);
+
+        /** 根据勾选计算每日总份额：若全部未勾选，则视为 9 只全计 */
+        const totalShares = computed(() => {
+          const data = rawData.value;
+          const any = checked.value.some(Boolean);
+          const use = any ? checked.value : Array(9).fill(true);
+          return data.map((row) => {
+            let s = 0;
+            for (let i = 0; i < 9; i++) {
+              if (!use[i]) continue;
+              const v = row[`fund_${i + 1}`];
+              if (!Number.isNaN(v)) s += v;
+            }
+            return s;
+          });
+        });
+
+        const dates = computed(() => rawData.value.map((r) => r.date));
+        const indexCloses = computed(() => rawData.value.map((r) => r.index_close));
+
+        const ma5 = computed(() => movingAverage(totalShares.value, 5));
+        const ma13 = computed(() => movingAverage(totalShares.value, 13));
+        const ma60 = computed(() => movingAverage(totalShares.value, 60));
+        const ma120 = computed(() => movingAverage(totalShares.value, 120));
+
+        const divergenceState = computed(() =>
+          latestDivergence(totalShares.value, indexCloses.value)
+        );
+        const divergenceAlert = computed(() => divergenceState.value.alert);
+        const statusMessage = computed(() => divergenceState.value.message);
+        /** 无数据时用中性样式，避免误显示为「正常绿灯」 */
+        const statusBarClass = computed(() => {
+          if (!hasData.value) return 'info';
+          return divergenceAlert.value ? 'warn' : 'ok';
+        });
+
+        /** 表格行：日期倒序；每行计算当日背离标记 */
+        const tableRows = computed(() => {
+          const ts = totalShares.value;
+          const ic = indexCloses.value;
+          const m5 = ma5.value;
+          const m13 = ma13.value;
+          const m60 = ma60.value;
+          const m120 = ma120.value;
+          const ds = dates.value;
+          const n = ds.length;
+          const rows = [];
+          for (let i = 0; i < n; i++) {
+            rows.push({
+              date: ds[i],
+              totalShare: ts[i],
+              indexClose: ic[i],
+              ma5: m5[i],
+              ma13: m13[i],
+              ma60: m60[i],
+              ma120: m120[i],
+              divergence: divergenceAtIndex(ts, ic, i),
+            });
+          }
+          rows.reverse();
+          return rows;
+        });
+
+        function formatNum(x) {
+          if (x == null || Number.isNaN(x)) return '—';
+          if (x >= 1e8) return (x / 1e8).toFixed(2) + ' 亿';
+          if (x >= 1e4) return (x / 1e4).toFixed(2) + ' 万';
+          return x.toFixed(0);
+        }
+
+        function buildChartOption() {
+          const d = dates.value;
+          const ts = totalShares.value;
+          const ic = indexCloses.value;
+          const n = d.length;
+          if (n === 0) {
+            return {
+              backgroundColor: 'transparent',
+              title: {
+                text: '暂无数据\n请生成或选择 data.json',
+                left: 'center',
+                top: 'center',
+                textStyle: { color: '#8b9cb3', fontSize: 16 },
+              },
+            };
+          }
+          // 默认展示最近 60 天：DataZoom 起始百分比
+          const showCount = 60;
+          const startPct = n <= showCount ? 0 : Math.round(((n - showCount) / n) * 100);
+
+          return {
+            backgroundColor: 'transparent',
+            textStyle: { color: '#8b9cb3' },
+            tooltip: {
+              trigger: 'axis',
+              axisPointer: { type: 'cross' },
+              confine: true,
+            },
+            legend: {
+              data: [
+                '基金总份额',
+                'MA5',
+                'MA13',
+                'MA60',
+                'MA120',
+                '沪深300收盘',
+              ],
+              textStyle: { color: '#8b9cb3' },
+              top: 0,
+            },
+            grid: { left: 56, right: 56, top: 44, bottom: 72 },
+            /** 双 Y 轴：左份额/均线，右指数 */
+            yAxis: [
+              {
+                type: 'value',
+                name: '份额',
+                position: 'left',
+                scale: true,
+                axisLabel: {
+                  color: '#8b9cb3',
+                  formatter: (v) => (v >= 1e8 ? (v / 1e8).toFixed(1) + '亿' : (v / 1e4).toFixed(0) + '万'),
+                },
+                splitLine: { lineStyle: { color: '#2d3a4f' } },
+              },
+              {
+                type: 'value',
+                name: '沪深300',
+                position: 'right',
+                scale: true,
+                axisLabel: { color: '#8b9cb3' },
+                splitLine: { show: false },
+              },
+            ],
+            xAxis: {
+              type: 'category',
+              data: d,
+              axisLabel: { color: '#8b9cb3', rotate: 45 },
+            },
+            dataZoom: [
+              {
+                type: 'slider',
+                start: startPct,
+                end: 100,
+                bottom: 8,
+                height: 22,
+                borderColor: '#2d3a4f',
+                fillerColor: 'rgba(59,130,246,0.25)',
+                handleStyle: { color: '#3b82f6' },
+              },
+              { type: 'inside', start: startPct, end: 100 },
+            ],
+            series: [
+              {
+                name: '基金总份额',
+                type: 'bar',
+                yAxisIndex: 0,
+                data: ts,
+                itemStyle: { color: 'rgba(59, 130, 246, 0.45)' },
+                barMaxWidth: 12,
+              },
+              {
+                name: 'MA5',
+                type: 'line',
+                yAxisIndex: 0,
+                data: ma5.value,
+                smooth: true,
+                showSymbol: false,
+                lineStyle: { width: 1.5, color: '#fbbf24' },
+              },
+              {
+                name: 'MA13',
+                type: 'line',
+                yAxisIndex: 0,
+                data: ma13.value,
+                smooth: true,
+                showSymbol: false,
+                lineStyle: { width: 1.5, color: '#a78bfa' },
+              },
+              {
+                name: 'MA60',
+                type: 'line',
+                yAxisIndex: 0,
+                data: ma60.value,
+                smooth: true,
+                showSymbol: false,
+                lineStyle: { width: 1.5, color: '#34d399' },
+              },
+              {
+                name: 'MA120',
+                type: 'line',
+                yAxisIndex: 0,
+                data: ma120.value,
+                smooth: true,
+                showSymbol: false,
+                lineStyle: { width: 1.5, color: '#f472b6' },
+              },
+              {
+                name: '沪深300收盘',
+                type: 'line',
+                yAxisIndex: 1,
+                data: ic,
+                smooth: true,
+                showSymbol: false,
+                lineStyle: { width: 2.5, color: '#f97316' },
+              },
+            ],
+          };
+        }
+
+        function renderChart() {
+          if (!chartEl.value) return;
+          if (!chartInstance) {
+            chartInstance = echarts.init(chartEl.value, null, { renderer: 'canvas' });
+          }
+          chartInstance.setOption(buildChartOption(), true);
+        }
+
+        function resizeChart() {
+          chartInstance && chartInstance.resize();
+        }
+
+        function applyPayload(payload) {
+          const { fund_labels, series } = normalizePayload(payload);
+          fundNames.value = fund_labels;
+          rawData.value = series;
+          checked.value = Array(9).fill(true);
+          loadError.value = '';
+        }
+
+        async function loadDataJson() {
+          loading.value = true;
+          loadError.value = '';
+          try {
+            const res = await fetch('data.json', { cache: 'no-cache' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}：无法读取 data.json`);
+            const payload = await res.json();
+            applyPayload(payload);
+          } catch (err) {
+            loadError.value =
+              (err && err.message) ||
+              '无法加载 data.json（浏览器打开本地文件时通常会拦截 fetch）。';
+          } finally {
+            loading.value = false;
+            nextTick(() => {
+              renderChart();
+              resizeChart();
+            });
+          }
+        }
+
+        function onJsonFile(ev) {
+          const file = ev.target.files && ev.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = () => {
+            try {
+              const payload = JSON.parse(String(reader.result));
+              applyPayload(payload);
+              loading.value = false;
+              nextTick(() => {
+                renderChart();
+                resizeChart();
+              });
+            } catch (e) {
+              loadError.value = 'JSON 解析失败：' + (e && e.message);
+            }
+          };
+          reader.readAsText(file, 'UTF-8');
+          ev.target.value = '';
+        }
+
+        onMounted(() => {
+          loadDataJson();
+          window.addEventListener('resize', resizeChart);
+        });
+
+        onUnmounted(() => {
+          window.removeEventListener('resize', resizeChart);
+          chartInstance && chartInstance.dispose();
+        });
+
+        watch(
+          [totalShares, indexCloses, ma5, ma13, ma60, ma120, dates, rawData],
+          () => {
+            if (!showTable.value && hasData.value) nextTick(() => renderChart());
+          },
+          { deep: true }
+        );
+
+        /** 从表格切回图表时容器由隐藏变为可见，需 resize 避免画布尺寸为 0 */
+        watch(showTable, (v) => {
+          if (!v) nextTick(() => { renderChart(); resizeChart(); });
+        });
+
+        return {
+          fundNames,
+          checked,
+          showTable,
+          chartEl,
+          tableRows,
+          divergenceAlert,
+          statusMessage,
+          statusBarClass,
+          formatNum,
+          loading,
+          loadError,
+          hasData,
+          onJsonFile,
+        };
+      },
+    }).mount('#app');
+  </script>
+</body>
+</html>
