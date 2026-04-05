@@ -15,7 +15,8 @@ import random
 import sys
 import time
 from datetime import date, timedelta
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import requests
@@ -50,6 +51,10 @@ ETF_CODES_SORTED: List[str] = sorted(ETF_META.keys())
 
 WORKDAY_REQUESTS = 120
 OUTPUT_CSV = "etf_300_scale_data.csv"
+# 增量模式：与「CSV 中最后交易日」起连续重叠的工作日根数（含最后一日共 N 日，用于覆盖修订）
+INCREMENTAL_OVERLAP_WEEKDAYS = 5
+# 合并后最多保留的交易日行数
+MAX_STORED_ROWS = 120
 
 SSE_QUERY_URL = "https://query.sse.com.cn/commonQuery.do"
 SSE_SQL_ID = "COMMON_SSE_ZQPZ_ETFZL_XXPL_ETFGM_SEARCH_L"
@@ -94,6 +99,84 @@ def last_n_weekdays(n: int, end: date) -> List[date]:
         d -= timedelta(days=1)
         scanned += 1
     return list(reversed(out))
+
+
+def subtract_weekdays(d: date, n: int) -> date:
+    """从 d 起向前数 n 个工作日（不含 d 当天往前走的第 n 个 weekday）。"""
+    cur = d
+    left = n
+    while left > 0:
+        cur -= timedelta(days=1)
+        if cur.weekday() < 5:
+            left -= 1
+    return cur
+
+
+def read_existing_etf_csv(path: Path) -> Optional[pd.DataFrame]:
+    """读取已存在的宽表 CSV；无效则返回 None。"""
+    if not path.is_file():
+        return None
+    try:
+        df = pd.read_csv(path, encoding="utf-8-sig")
+    except Exception:  # noqa: BLE001
+        return None
+    if df.empty or "日期" not in df.columns:
+        return None
+    return df
+
+
+def latest_date_in_etf_csv(df: pd.DataFrame) -> Optional[date]:
+    s = pd.to_datetime(df["日期"], errors="coerce").dropna()
+    if s.empty:
+        return None
+    return s.max().date()
+
+
+def weekdays_between_inclusive(start: date, end: date) -> List[date]:
+    """[start, end] 内所有工作日（周一～周五）。"""
+    if start > end:
+        return []
+    out: List[date] = []
+    d = start
+    while d <= end:
+        if d.weekday() < 5:
+            out.append(d)
+        d += timedelta(days=1)
+    return out
+
+
+def plan_fetch_weekdays(today: date, existing: Optional[pd.DataFrame]) -> Tuple[List[date], str]:
+    """
+    决定本次要请求的日期列表。
+    - 无历史：仍拉满 WORKDAY_REQUESTS 个工作日（冷启动）。
+    - 有历史：从「最后日期往前 INCREMENTAL_OVERLAP_WEEKDAYS 个工作日」到今天，避免每天重复扫 120 天。
+    """
+    if existing is None:
+        w = last_n_weekdays(WORKDAY_REQUESTS, today)
+        return w, "全量(冷启动)"
+    last_d = latest_date_in_etf_csv(existing)
+    if last_d is None:
+        w = last_n_weekdays(WORKDAY_REQUESTS, today)
+        return w, "全量(无法解析历史日期)"
+    # 从 last_d 起向前再数 (N-1) 个工作日作为起点，使 [start, last_d] 覆盖 N 个交易日
+    back = max(0, INCREMENTAL_OVERLAP_WEEKDAYS - 1)
+    start = subtract_weekdays(last_d, back)
+    w = weekdays_between_inclusive(start, today)
+    return w, f"增量(历史至 {last_d}，重叠约 {INCREMENTAL_OVERLAP_WEEKDAYS} 个交易日)"
+
+
+def merge_etf_wide(old: Optional[pd.DataFrame], new_wide: pd.DataFrame) -> pd.DataFrame:
+    """按日期合并，新数据覆盖同日旧数据；保留最近 MAX_STORED_ROWS 行（按日期降序）。"""
+    if old is None or old.empty:
+        out = new_wide.copy()
+    else:
+        out = pd.concat([old, new_wide], ignore_index=True)
+    out["日期"] = pd.to_datetime(out["日期"], errors="coerce")
+    out = out.dropna(subset=["日期"])
+    out = out.sort_values("日期").drop_duplicates(subset=["日期"], keep="last")
+    out = out.sort_values("日期", ascending=False).head(MAX_STORED_ROWS).reset_index(drop=True)
+    out["日期"] = out["日期"].dt.strftime("%Y-%m-%d")
+    return out
 
 
 def fetch_sse_etf_scale_one_day(
@@ -260,9 +343,12 @@ def long_to_output_csv(long_df: pd.DataFrame) -> pd.DataFrame:
 
 def main() -> int:
     end = date.today()
-    weekdays = last_n_weekdays(WORKDAY_REQUESTS, end)
+    out_path = Path(OUTPUT_CSV)
+    existing = read_existing_etf_csv(out_path)
+    weekdays, mode = plan_fetch_weekdays(end, existing)
     logger.info(
-        "开始抓取：共 %s 个工作日，自 %s 至 %s",
+        "模式：%s | 本次请求 %s 个工作日：%s → %s",
+        mode,
         len(weekdays),
         weekdays[0].isoformat() if weekdays else "-",
         weekdays[-1].isoformat() if weekdays else "-",
@@ -271,9 +357,13 @@ def main() -> int:
     try:
         with requests.Session() as session:
             long_df = collect_target_long(session, weekdays)
-        result = long_to_output_csv(long_df)
+        if long_df.empty and existing is not None:
+            logger.warning("本次未拉到新数据，保留原 CSV 不变。")
+            return 0
+        new_wide = long_to_output_csv(long_df)
+        result = merge_etf_wide(existing, new_wide)
         result.to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
-        logger.info("已写入 %s，行数=%s", OUTPUT_CSV, len(result))
+        logger.info("已写入 %s，行数=%s（合并后保留最近 %s 日）", OUTPUT_CSV, len(result), MAX_STORED_ROWS)
     except Exception as exc:  # noqa: BLE001
         logger.exception("运行失败: %s", exc)
         return 1

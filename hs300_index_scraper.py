@@ -15,6 +15,7 @@ import random
 import sys
 import time
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -46,6 +47,8 @@ QQ_KLINE_URL = "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/g
 
 CALENDAR_LOOKBACK = 200
 TRADING_DAYS_KEEP = 120
+# 增量拉指数 K 线时，相对 CSV 最后日期再往前多要的「自然日」重叠（覆盖修订、节假日边界）
+INDEX_INCREMENTAL_OVERLAP_DAYS = 14
 
 OUTPUT_CSV = "hs300_index_120d.csv"
 MAX_RETRIES_PER_HOST = 3
@@ -288,6 +291,35 @@ def fetch_hs300_kline(beg: str, end_s: str, session: requests.Session) -> pd.Dat
         return fetch_hs300_kline_qq(start_d, end_d, session)
 
 
+def read_existing_index_csv(path: Path) -> Optional[pd.DataFrame]:
+    if not path.is_file():
+        return None
+    try:
+        df = pd.read_csv(path, encoding="utf-8-sig")
+    except Exception:  # noqa: BLE001
+        return None
+    if df.empty or "日期" not in df.columns:
+        return None
+    return df
+
+
+def merge_index_kline(old: Optional[pd.DataFrame], raw_new: pd.DataFrame) -> pd.DataFrame:
+    """按日期合并旧表与新拉取的 K 线，新数据覆盖同日；再交给 build_output_df 截断为 keep 条。"""
+    if old is None or old.empty:
+        return raw_new.copy()
+    cols = [c for c in raw_new.columns if c in old.columns]
+    if "日期" not in cols:
+        return raw_new.copy()
+    part_old = old[cols].copy()
+    part_new = raw_new[cols].copy()
+    merged = pd.concat([part_old, part_new], ignore_index=True)
+    merged["日期"] = pd.to_datetime(merged["日期"], errors="coerce")
+    merged = merged.dropna(subset=["日期"])
+    merged = merged.sort_values("日期").drop_duplicates(subset=["日期"], keep="last")
+    merged["日期"] = merged["日期"].dt.strftime("%Y-%m-%d")
+    return merged
+
+
 def build_output_df(raw: pd.DataFrame, keep: int) -> pd.DataFrame:
     if raw.empty:
         raise ValueError("未获取到任何指数 K 线数据。")
@@ -310,17 +342,38 @@ def build_output_df(raw: pd.DataFrame, keep: int) -> pd.DataFrame:
 
 def main() -> int:
     end = date.today()
-    start = end - timedelta(days=CALENDAR_LOOKBACK)
-    beg = start.strftime("%Y%m%d")
     end_s = end.strftime("%Y%m%d")
-    logger.info("拉取 %s(%s) 日线: %s ~ %s", INDEX_NAME, INDEX_CODE, beg, end_s)
+    out_path = Path(OUTPUT_CSV)
+    existing = read_existing_index_csv(out_path)
+
+    if existing is not None:
+        latest = pd.to_datetime(existing["日期"], errors="coerce").max()
+        if pd.isna(latest):
+            start = end - timedelta(days=CALENDAR_LOOKBACK)
+            beg = start.strftime("%Y%m%d")
+            mode = "全量(无法解析历史日期)"
+        else:
+            latest_d = latest.date()
+            overlap_start = latest_d - timedelta(days=INDEX_INCREMENTAL_OVERLAP_DAYS)
+            beg = overlap_start.strftime("%Y%m%d")
+            mode = f"增量(CSV 末条 {latest_d}，向前重叠 {INDEX_INCREMENTAL_OVERLAP_DAYS} 自然日)"
+    else:
+        start = end - timedelta(days=CALENDAR_LOOKBACK)
+        beg = start.strftime("%Y%m%d")
+        mode = "全量(冷启动)"
+
+    logger.info("拉取 %s(%s) 日线 [%s]: %s ~ %s", INDEX_NAME, INDEX_CODE, mode, beg, end_s)
 
     try:
         with _build_session() as session:
-            raw = fetch_hs300_kline(beg, end_s, session)
+            raw_new = fetch_hs300_kline(beg, end_s, session)
+        if raw_new.empty and existing is not None:
+            logger.warning("本次未拉到指数 K 线，保留原 CSV。")
+            return 0
+        raw = merge_index_kline(existing, raw_new)
         out = build_output_df(raw, TRADING_DAYS_KEEP)
         out.to_csv(OUTPUT_CSV, index=False, encoding="utf-8-sig")
-        logger.info("已写入 %s，共 %s 行（日期降序）", OUTPUT_CSV, len(out))
+        logger.info("已写入 %s，共 %s 行（合并后保留最近 %s 条，日期降序）", OUTPUT_CSV, len(out), TRADING_DAYS_KEEP)
     except Exception as exc:  # noqa: BLE001
         logger.exception("运行失败: %s", exc)
         return 1
