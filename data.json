@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-16T14:41:19Z",
+  "generated_at": "2026-10-17T13:18:34Z",
   "source_files": {
     "etf_scale": "etf_300_scale_data.csv",
     "hs300_index": "hs300_index_120d.csv"
@@ -18,7 +18,7 @@
   "merge_stats": {
     "rows_etf": 120,
     "rows_index": 120,
-    "rows_merged": 110
+    "rows_merged": 111
   },
   "series": [
     {
@@ -1449,6 +1449,19 @@
       "fund_6": 2162381200.0,
       "fund_7": 90258100.0,
       "fund_8": 1278802400.0,
+      "fund_9": 136550000.0
+    },
+    {
+      "date": "2026-10-16",
+      "index_close": 4170.61,
+      "fund_1": 28552987700.0,
+      "fund_2": 16879244000.0,
+      "fund_3": 652068500.0,
+      "fund_4": 8688849800.0,
+      "fund_5": 685914700.0,
+      "fund_6": 2168381200.0,
+      "fund_7": 90258100.0,
+      "fund_8": 1302802400.0,
       "fund_9": 136550000.0
     }
   ]
